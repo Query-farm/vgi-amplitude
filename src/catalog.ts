@@ -5,7 +5,7 @@
  */
 
 import { type CatalogDescriptor, field, schema, utf8, type VgiFunction } from "@query-farm/vgi";
-import { CHART_FUNCTIONS, UNIFIED_FUNCTIONS } from "./amp/analytics.ts";
+import { CHART_FUNCTIONS, realtimeActiveUsers, UNIFIED_FUNCTIONS } from "./amp/analytics.ts";
 import { SECRET_TYPE } from "./amp/client.ts";
 import { cohortMembers } from "./amp/cohort_members.ts";
 import { events, unifiedEvents } from "./amp/events.ts";
@@ -22,6 +22,7 @@ import {
 } from "./meta.ts";
 
 export const FUNCTIONS: VgiFunction[] = [events, ...CHART_FUNCTIONS, cohortMembers];
+export const TABLES = [...MAIN_TABLES, realtimeActiveUsers];
 export const UNIFIED_TABLES = [unifiedEvents, ...UNIFIED_DEF_TABLES];
 
 const doc = (text: string) => new Map([["vgi_doc", text]]);
@@ -77,7 +78,7 @@ function stampExampleQueries(functions: VgiFunction[]): Example[] {
 const tableExamples = (tables: { tags?: Record<string, string> }[]) =>
   tables.flatMap((t) => JSON.parse(t.tags?.["vgi.example_queries"] ?? "[]") as Example[]);
 
-const MAIN_EXAMPLES = [...stampExampleQueries(FUNCTIONS), ...tableExamples(MAIN_TABLES)];
+const MAIN_EXAMPLES = [...stampExampleQueries(FUNCTIONS), ...tableExamples(TABLES)];
 const UNIFIED_EXAMPLES = [...stampExampleQueries(UNIFIED_FUNCTIONS), ...tableExamples(UNIFIED_TABLES)];
 
 export const CATALOG: CatalogDescriptor = {
@@ -91,7 +92,7 @@ export const CATALOG: CatalogDescriptor = {
       path: ["main"],
       comment: SCHEMA_DOC_MD,
       functions: FUNCTIONS,
-      tables: MAIN_TABLES,
+      tables: TABLES,
       tags: { ...SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(MAIN_EXAMPLES.slice(0, 12)) },
     },
     {

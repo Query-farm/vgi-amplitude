@@ -1,16 +1,103 @@
 # Private graders for the public vgi.agent_test_tasks in the worker's catalog metadata.
-# `vgi-lint lint --ai` runs an agent on each prompt and grades it with check_sql.
-# See https://github.com/Query-farm/vgi-lint-check (VGI920).
+# `vgi-lint lint --ai` runs an agent on each prompt and grades it (VGI920).
+#
+# Every amplitude object needs an `amplitude` secret pointing at an Amplitude project
+# (the offline replay project in test/mock_api/server.py works too:
+# API_KEY 'test-api-key', SECRET_KEY 'test-secret-key', BASE_URL 'http://127.0.0.1:<port>').
+# The replay data is fixed, so these tasks compare against a reference query.
 tasks:
-  - name: formal_greeting
-    reference_sql: SELECT amplitude.main.greet('Grace', 'formal') AS greeting
-  - name: sum_of_squares
-    reference_sql: SELECT sum(squared) AS total FROM amplitude.main.sequence_table(10)
-  - name: stepped_sequence
-    reference_sql: SELECT n FROM amplitude.main.sequence_table(4, step := 5) ORDER BY n
-  # Reads the public demo API (https://vgi-starter-api.query-farm.services/v1).
-  - name: items_per_category
-    check_sql: >-
-      SELECT count(*) = 3 AND sum(items) = 25
-      FROM (SELECT category, count(*) AS items
-            FROM amplitude.main.fetch_items('https://vgi-starter-api.query-farm.services/v1') GROUP BY category)
+  - name: top_event_types
+    reference_sql: >-
+      SELECT event_type FROM amplitude.main.event_totals ORDER BY totals_this_week DESC LIMIT 3
+  - name: purchases_on_day
+    reference_sql: >-
+      SELECT count(*) AS purchases FROM amplitude.main.events()
+      WHERE event_type = 'Purchase'
+        AND event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00'
+  - name: revenue_by_country
+    reference_sql: >-
+      SELECT country, sum(revenue) AS revenue FROM amplitude.main.events()
+      WHERE event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00'
+        AND revenue IS NOT NULL
+      GROUP BY country ORDER BY country
+  - name: daily_uniques
+    reference_sql: >-
+      SELECT period, value FROM amplitude.main.segmentation('Purchase', DATE '2026-11-01', DATE '2026-11-03')
+      ORDER BY period
+  - name: signup_conversion
+    reference_sql: >-
+      SELECT conversion_rate FROM amplitude.main.funnel(['Sign Up', 'Purchase'], DATE '2026-11-01', DATE '2026-11-07')
+      WHERE step = 2
+  - name: largest_cohort
+    reference_sql: SELECT name FROM amplitude.main.cohorts ORDER BY size DESC LIMIT 1
+  - name: purchase_properties
+    reference_sql: >-
+      SELECT event_property FROM amplitude.main.event_properties WHERE event_type = 'Purchase' ORDER BY event_property
+  - name: pii_user_properties
+    reference_sql: >-
+      SELECT user_property FROM amplitude.main.user_properties
+      WHERE list_contains(classifications, 'PII') ORDER BY user_property
+  - name: user_lookup
+    reference_sql: SELECT amplitude_id, country FROM amplitude.main.user_profile('user_42')
+  - name: day1_retention
+    reference_sql: >-
+      SELECT retention_rate FROM amplitude.main.retention('_new', '_all', DATE '2026-11-01', DATE '2026-11-07')
+      WHERE cohort IS NULL AND day = 1
+  - name: november_annotations
+    reference_sql: >-
+      SELECT label, start_time FROM amplitude.main.annotations
+      WHERE start_time >= TIMESTAMPTZ '2026-11-01 00:00:00+00' AND start_time < TIMESTAMPTZ '2026-12-01 00:00:00+00'
+      ORDER BY start_time
+  - name: dau_nov2
+    reference_sql: >-
+      SELECT users FROM amplitude.main.active_users(DATE '2026-11-02', DATE '2026-11-02')
+  - name: avg_session_minutes
+    reference_sql: >-
+      SELECT avg_seconds / 60 AS minutes FROM amplitude.main.average_session_length(DATE '2026-11-02', DATE '2026-11-02')
+  - name: pro_cohort_members
+    reference_sql: >-
+      SELECT count(*) AS members FROM amplitude.main.cohort_members('coh_power', property_keys := ['plan'])
+      WHERE properties->>'gp:plan' = 'pro'
+  - name: event_category_names
+    reference_sql: SELECT name FROM amplitude.main.event_categories ORDER BY name
+  - name: deleted_event_types
+    reference_sql: SELECT event_type FROM amplitude.main.event_types WHERE is_deleted ORDER BY event_type
+  - name: org_group_properties
+    reference_sql: >-
+      SELECT group_property FROM amplitude.main.group_properties WHERE group_type = 'org' ORDER BY group_property
+  - name: realtime_now
+    reference_sql: >-
+      SELECT users FROM amplitude.main.realtime_active_users WHERE series_label = 'Today'
+      ORDER BY time_of_day DESC LIMIT 1
+  - name: arpu_30d
+    reference_sql: >-
+      SELECT value FROM amplitude.main.revenue_ltv(DATE '2026-11-01', DATE '2026-11-01') WHERE day = 30
+  - name: top_session_bin
+    reference_sql: >-
+      SELECT bin FROM amplitude.main.session_length_distribution(DATE '2026-11-01', DATE '2026-11-07')
+      ORDER BY sessions DESC LIMIT 1
+  - name: sessions_per_user_nov1
+    reference_sql: >-
+      SELECT sessions_per_user FROM amplitude.main.sessions_per_user(DATE '2026-11-01', DATE '2026-11-01')
+  - name: user_event_total
+    reference_sql: >-
+      SELECT count(*) AS events FROM amplitude.main.user_activity(12345, max_events := 1000000)
+  - name: platform_mix
+    reference_sql: >-
+      SELECT value AS platform, users FROM amplitude.main.user_composition(DATE '2026-11-01', DATE '2026-11-07', 'platform')
+      ORDER BY users DESC
+  - name: search_user_prefix
+    reference_sql: SELECT amplitude_id FROM amplitude.main.user_search('user_') ORDER BY amplitude_id
+  - name: shared_cohort_sizes
+    reference_sql: SELECT name, size FROM amplitude.unified.cohorts ORDER BY name
+  - name: shared_undocumented_events
+    reference_sql: >-
+      SELECT event_name FROM amplitude.unified.event_definitions WHERE description IS NULL ORDER BY event_name
+  - name: shared_event_users
+    reference_sql: >-
+      SELECT count(DISTINCT distinct_id) AS people FROM amplitude.unified.events
+      WHERE received_time >= TIMESTAMPTZ '2026-11-14 04:00:00+00' AND received_time < TIMESTAMPTZ '2026-11-14 05:00:00+00'
+  - name: shared_user_props
+    reference_sql: SELECT count(*) AS n FROM amplitude.unified.property_definitions WHERE scope = 'user'
+  - name: shared_user_last_seen
+    reference_sql: SELECT last_seen FROM amplitude.unified.users('user_7')

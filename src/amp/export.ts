@@ -238,6 +238,7 @@ export interface ExportSpec {
   columns: Col[];
   examples: FnExample[];
   category?: Category;
+  primaryKey?: string[];
   /** The column holding server_upload_time (`received_time` in the shared shape). */
   uploadColumn?: string;
   /** Named tuning arguments (the main.events function) or fixed defaults (catalog tables). */
@@ -392,7 +393,7 @@ export function defineExportScan(spec: ExportSpec, fnName: string): VgiFunction 
 
 export function defineExportTable(spec: ExportSpec, schemaPath: string[]): TableDescriptor {
   const fn = defineExportScan({ ...spec, withArgs: false }, `${schemaPath.join("_")}_${spec.name}_scan`);
-  return catalogTable({ ...spec, category: spec.category ?? "events" }, fn, schemaPath, []);
+  return catalogTable({ ...spec, category: spec.category ?? "events" }, fn, schemaPath, spec.primaryKey ?? []);
 }
 
 // ------------------------------------------------------------------ the columns
@@ -401,80 +402,64 @@ const ep = (r: Row) => r.event_properties;
 
 /** Every documented Export API field, typed. */
 export const NATIVE_EVENT_COLUMNS: Col[] = [
-  C.str("uuid", "Amplitude's unique id for the event.", "uuid"),
-  C.str("event_type", "Event type (name), e.g. 'Purchase'.", "event_type"),
-  C.time("event_time", "When the event happened (UTC, client time corrected by Amplitude).", "event_time"),
-  C.time(
-    "server_upload_time",
-    "When Amplitude received the upload; the Export API's hour range filters on this.",
-    "server_upload_time",
-  ),
-  C.time("server_received_time", "When the Amplitude server received the event.", "server_received_time"),
-  C.time("client_event_time", "Event time as reported by the client clock.", "client_event_time"),
-  C.time("client_upload_time", "Upload time as reported by the client clock.", "client_upload_time"),
-  C.time("processed_time", "When Amplitude finished processing the event.", "processed_time"),
-  C.time(
-    "user_creation_time",
-    "When Amplitude first saw this user (NULL for legacy or unmerged users).",
-    "user_creation_time",
-  ),
-  C.str("user_id", "Your user id (NULL for anonymous users).", "user_id"),
+  C.str("uuid", "Event uuid.", "uuid"),
+  C.str("event_type", "Event type.", "event_type"),
+  C.time("event_time", "When the event happened (UTC, clock-corrected).", "event_time"),
+  C.time("server_upload_time", "Upload time; the Export API's hour range filters on it.", "server_upload_time"),
+  C.time("server_received_time", "Server receive time.", "server_received_time"),
+  C.time("client_event_time", "Event time by the client clock.", "client_event_time"),
+  C.time("client_upload_time", "Upload time by the client clock.", "client_upload_time"),
+  C.time("processed_time", "Processing time.", "processed_time"),
+  C.time("user_creation_time", "When the user was first seen.", "user_creation_time"),
+  C.str("user_id", "User id (NULL if anonymous).", "user_id"),
   C.str("device_id", "Device id.", "device_id"),
-  C.big("amplitude_id", "Amplitude's internal user id (canonical across merged devices).", "amplitude_id"),
+  C.big("amplitude_id", "Amplitude's user id.", "amplitude_id"),
   C.big("event_id", "Per-device event counter.", "event_id"),
-  C.big(
-    "session_id",
-    "Session id: the session start time in epoch ms (NULL when the event has no session).",
-    sessionId,
-  ),
-  C.str("insert_id", "Client-supplied deduplication id ($insert_id).", "$insert_id"),
-  C.big("app", "Amplitude project (app) id.", "app"),
-  C.str("platform", "Platform, e.g. 'iOS', 'Android', 'Web'.", "platform"),
-  C.str("os_name", "Operating system name.", "os_name"),
-  C.str("os_version", "Operating system version.", "os_version"),
+  C.big("session_id", "Session start, epoch ms (NULL: none).", sessionId),
+  C.str("insert_id", "Dedup id ($insert_id).", "$insert_id"),
+  C.big("app", "Project id.", "app"),
+  C.str("platform", "Platform (iOS, Web …).", "platform"),
+  C.str("os_name", "OS name.", "os_name"),
+  C.str("os_version", "OS version.", "os_version"),
   C.str("device_brand", "Device brand.", "device_brand"),
   C.str("device_manufacturer", "Device manufacturer.", "device_manufacturer"),
   C.str("device_model", "Device model.", "device_model"),
-  C.str("device_family", "Device family, e.g. 'iPhone'.", "device_family"),
-  C.str("device_type", "Device type, e.g. 'Apple iPhone'.", "device_type"),
-  C.str("device_carrier", "Mobile carrier.", "device_carrier"),
-  C.str("country", "Country (from IP geolocation).", "country"),
-  C.str("region", "Region or state.", "region"),
+  C.str("device_family", "Device family.", "device_family"),
+  C.str("device_type", "Device type.", "device_type"),
+  C.str("device_carrier", "Carrier.", "device_carrier"),
+  C.str("country", "Country (IP geo).", "country"),
+  C.str("region", "Region.", "region"),
   C.str("city", "City.", "city"),
-  C.str("dma", "Designated market area.", "dma"),
-  C.str("language", "Device language.", "language"),
-  C.str("ip_address", "Client IP address.", "ip_address"),
+  C.str("dma", "DMA.", "dma"),
+  C.str("language", "Language.", "language"),
+  C.str("ip_address", "Client IP.", "ip_address"),
   C.num("location_lat", "Latitude.", "location_lat"),
   C.num("location_lng", "Longitude.", "location_lng"),
   C.str("version_name", "App version.", "version_name"),
-  C.str("start_version", "App version the user first used.", "start_version"),
-  C.str("library", "SDK that sent the event, e.g. 'amplitude-ts/2.0.0'.", "library"),
-  C.bool("paying", "Whether the user has ever made a revenue event.", "paying"),
-  C.num("revenue", "Revenue of the event: revenue / $revenue, else $price × $quantity.", revenueOf),
-  C.json("event_properties", "Event properties (JSON object).", "event_properties"),
-  C.json("user_properties", "User properties at the time of the event (JSON object).", "user_properties"),
-  C.json("group_properties", "Group properties (JSON object).", "group_properties"),
-  C.json("groups", "Groups the user belongs to (JSON object of group type → names).", "groups"),
-  C.json("data", "Amplitude-internal event data (JSON object).", "data"),
-  C.str(
-    "amplitude_event_type",
-    "Amplitude's internal event type for system events (e.g. merges).",
-    "amplitude_event_type",
-  ),
+  C.str("start_version", "First app version.", "start_version"),
+  C.str("library", "Sending SDK.", "library"),
+  C.bool("paying", "User has paid.", "paying"),
+  C.num("revenue", "Revenue: $revenue, else $price × $quantity.", revenueOf),
+  C.json("event_properties", "Event properties.", "event_properties"),
+  C.json("user_properties", "User properties then.", "user_properties"),
+  C.json("group_properties", "Group properties.", "group_properties"),
+  C.json("groups", "Groups (type → names).", "groups"),
+  C.json("data", "Internal data.", "data"),
+  C.str("amplitude_event_type", "System event type.", "amplitude_event_type"),
   C.str("amplitude_attribution_ids", "Attribution ids.", "amplitude_attribution_ids"),
-  C.str("adid", "Google advertising id.", "adid"),
-  C.str("idfa", "Apple identifier for advertisers.", "idfa"),
-  C.num("sample_rate", "Sampling rate (NULL when unsampled).", "sample_rate"),
+  C.str("adid", "Google ad id.", "adid"),
+  C.str("idfa", "Apple IDFA.", "idfa"),
+  C.num("sample_rate", "Sample rate.", "sample_rate"),
 ];
 
 /** The shared product-analytics vocabulary (see README, "Shared product-analytics vocabulary"). */
 export const UNIFIED_EVENT_COLUMNS: Col[] = [
   C.lit("tool", "The analytics tool the row came from: 'amplitude'.", "amplitude"),
-  C.str("event_id", "The tool's unique event id (Amplitude uuid).", "uuid"),
+  C.str("uuid", "The tool's unique event id (Amplitude uuid).", (r) => r.uuid ?? r.$insert_id ?? "", false),
   C.str("event_name", "Event name (Amplitude event_type).", (r) => r.event_type ?? r.amplitude_event_type ?? "", false),
   C.time("event_time", "When the event happened (UTC).", (r) => r.event_time ?? r.server_upload_time, false),
   C.time("received_time", "When the tool received the event (Amplitude server_upload_time).", "server_upload_time"),
-  C.str("user_id", "Your user id (NULL for anonymous users).", "user_id"),
+  C.str("user_id", "User id (NULL if anonymous).", "user_id"),
   C.str("device_id", "Device / anonymous id.", "device_id"),
   C.str("distinct_id", "The id the tool resolves people by (Amplitude amplitude_id, as text).", (r) =>
     r.amplitude_id == null ? null : String(r.amplitude_id),
@@ -484,13 +469,13 @@ export const UNIFIED_EVENT_COLUMNS: Col[] = [
     return s === null ? null : String(s);
   }),
   C.str("insert_id", "Client deduplication id.", "$insert_id"),
-  C.json("properties", "Event properties (JSON object).", ep),
+  C.json("properties", "Event properties.", ep),
   C.json("user_properties", "User properties at event time (JSON object).", "user_properties"),
   C.str("platform", "Platform, e.g. 'iOS', 'Web'.", "platform"),
-  C.str("os", "Operating system name.", "os_name"),
-  C.str("country", "Country.", "country"),
-  C.str("city", "City.", "city"),
-  C.str("app_version", "App version.", "version_name"),
+  C.str("os", "OS name.", "os_name"),
+  C.str("country", "Country name from IP geolocation.", "country"),
+  C.str("city", "City name from IP geolocation.", "city"),
+  C.str("app_version", "Version of the app that sent the event.", "version_name"),
   C.str("library", "SDK that sent the event.", "library"),
   C.num("revenue", "Revenue attached to the event, in the project's currency.", revenueOf),
 ];

@@ -347,7 +347,7 @@ iOS	250
 (none)	50
 
 query TTI
-SELECT series_label, time_of_day, users FROM amplitude.main.realtime_active_users() WHERE series_label = 'Today' ORDER BY time_of_day;
+SELECT series_label, time_of_day, users FROM amplitude.main.realtime_active_users WHERE series_label = 'Today' ORDER BY time_of_day;
 ----
 Today	15:00	123
 Today	15:05	144
@@ -532,7 +532,7 @@ SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/3/a
 # ----------------------------------------------------------------- unified
 
 query TTTI
-SELECT tool, cohort_id, name, size FROM amplitude.unified.cohorts ORDER BY cohort_id;
+SELECT tool, id, name, size FROM amplitude.unified.cohorts ORDER BY id;
 ----
 amplitude	coh_old	Old Trial	40
 amplitude	coh_power	Power Buyers	12000
@@ -574,3 +574,10 @@ SELECT tool, count(*) FROM (
 ----
 amplitude	2
 other	1
+
+# The shared events table keys rows by the event uuid.
+query TI
+SELECT min(uuid), count(DISTINCT uuid) FROM amplitude.unified.events
+WHERE received_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND received_time < TIMESTAMPTZ '2026-11-14 01:00:00+00';
+----
+00000000-0000-4000-8000-000000000002	3

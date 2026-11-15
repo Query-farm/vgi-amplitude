@@ -17,7 +17,18 @@
 import { dateDay, int32, int64, list, utf8, type VgiFunction } from "@query-farm/vgi";
 import { type AmpConfig, AmpError, ampGet } from "./client.ts";
 import { NATIVE_EVENT_COLUMNS } from "./export.ts";
-import { asBig, asNum, C, type Col, defineAmpTable, eventJson, jsonArg, type Row, ymd } from "./table.ts";
+import {
+  asBig,
+  asNum,
+  C,
+  type Col,
+  defineAmpCatalogTable,
+  defineAmpTable,
+  eventJson,
+  jsonArg,
+  type Row,
+  ymd,
+} from "./table.ts";
 
 const Q = "amplitude.main";
 const U = "amplitude.unified";
@@ -33,10 +44,9 @@ const GRAN_DOC =
   "Interval (named): 'day' (default), 'week', 'month'; segmentation and funnel also take 'hour' (≤ 7 days) and 'realtime' (5-minute, ≤ 2 days).";
 const DAY_WEEK_MONTH = { choices: ["day", "week", "month"] };
 const ALL_GRAN = { choices: ["realtime", "hour", "day", "week", "month"] };
-const SEGMENTS_DOC =
-  'Segment definitions (named): Amplitude `s` JSON, e.g. \'[{"prop":"country","op":"is","values":["United States"]}]\'. NULL = all users.';
-const START_DOC = "First day of the range (DATE, project time zone).";
-const END_DOC = "Last day of the range, inclusive (DATE).";
+const SEGMENTS_DOC = "Segment definitions in Amplitude's `s` JSON format (named); NULL means all users.";
+const START_DOC = "First day of the range, in the project time zone.";
+const END_DOC = "Last day of the range, inclusive.";
 
 /** The label of series i: seriesLabels / seriesMeta entries are a string, a number or [index, label]. */
 export function seriesLabel(labels: unknown, i: number): string | null {
@@ -289,7 +299,7 @@ export const funnel = defineAmpTable<FunnelArgs & Record<string, unknown>>({
     group_limit: int32,
   },
   argDocs: {
-    events: "Funnel steps in order: event names or event JSON (positional), e.g. ['Sign Up', 'Purchase'].",
+    events: "Funnel steps in order (positional): a list of event names or event JSON objects.",
     start_date: START_DOC,
     end_date: END_DOC,
     mode: "Step order (named): ordered (default), unordered, sequential.",
@@ -434,8 +444,8 @@ export const retention = defineAmpTable<RetArgs & Record<string, unknown>>({
     segments: utf8(),
   },
   argDocs: {
-    start_event: "Start event: '_new', '_active', an event name or event JSON (positional).",
-    return_event: "Return event: '_all', '_active', an event name or event JSON (positional).",
+    start_event: "Event that puts a user in a cohort (positional): an event name or event JSON; _new means new users.",
+    return_event: "Event that counts as coming back (positional): an event name or event JSON; _all means any event.",
     start_date: START_DOC,
     end_date: END_DOC,
     mode: "Retention mode (named): nday (default), rolling, bracket, nday_or_before.",
@@ -672,30 +682,34 @@ export const userComposition = defineAmpTable<RangeArgs & { property: string }>(
   ],
 });
 
-export const realtimeActiveUsers = defineAmpTable<Record<string, never>>({
-  name: "realtime_active_users",
-  description: "Real-time active users in 5-minute buckets for today and yesterday",
-  title: "Amplitude Real-time Active Users",
-  category: "charts",
-  keywords: "amplitude, real-time, realtime, live users, active users, now",
-  docLlm:
-    "Real-time active users (GET /api/2/realtime?i=5) in 5-minute buckets: series_label ('Today' or " +
-    "'Yesterday'), time_of_day (HH:MM) and users. Use it for 'how many users are on right now' questions.",
-  docMd: "## realtime_active_users\n\nActive users per 5-minute bucket, today and yesterday.",
-  columns: [
-    C.str("series_label", "'Today' or 'Yesterday'.", "series_label"),
-    C.str("time_of_day", "Bucket start (HH:MM).", "period"),
-    C.big("users", "Active users in the bucket.", "value"),
-  ],
-  requests: () => [{ path: "/api/2/realtime", query: { i: "5" } }],
-  rows: (body) => longSeries(dataOf(body)),
-  examples: [
-    {
-      sql: `SELECT time_of_day, users FROM ${Q}.realtime_active_users() WHERE series_label = 'Today' ORDER BY time_of_day DESC LIMIT 1`,
-      description: "Active users in the latest bucket today",
-    },
-  ],
-});
+export const realtimeActiveUsers = defineAmpCatalogTable(
+  {
+    name: "realtime_active_users",
+    description: "Real-time active users in 5-minute buckets for today and yesterday",
+    title: "Amplitude Real-time Active Users",
+    category: "charts",
+    keywords: "amplitude, real-time, realtime, live users, active users, now",
+    docLlm:
+      "Real-time active users (GET /api/2/realtime?i=5), a table, in 5-minute buckets: series_label ('Today' or " +
+      "'Yesterday'), time_of_day (HH:MM) and users. Use it for 'how many users are on right now' questions.",
+    docMd: "## realtime_active_users\n\nActive users per 5-minute bucket, today and yesterday.",
+    columns: [
+      C.str("series_label", "'Today' or 'Yesterday'.", (r) => r.series_label ?? `series ${r.series_index}`, false),
+      C.str("time_of_day", "Bucket start (HH:MM).", (r) => r.period ?? "", false),
+      C.big("users", "Active users in the bucket.", "value"),
+    ],
+    requests: () => [{ path: "/api/2/realtime", query: { i: "5" } }],
+    rows: (body) => longSeries(dataOf(body)),
+    examples: [
+      {
+        sql: `SELECT time_of_day, users FROM ${Q}.realtime_active_users WHERE series_label = 'Today' ORDER BY time_of_day DESC LIMIT 1`,
+        description: "Active users in the latest bucket today",
+      },
+    ],
+  },
+  ["main"],
+  ["series_label", "time_of_day"],
+);
 
 const LTV_METRIC: Record<string, string> = { arpu: "0", arppu: "1", total_revenue: "2", paying_users: "3" };
 
@@ -832,7 +846,7 @@ export const userActivity = defineAmpTable<{ amplitude_id: bigint; max_events: n
   keywords: "amplitude, user activity, user timeline, event stream, user lookup, debugging",
   docLlm:
     "One user's events (GET /api/2/useractivity?user=<amplitude_id>), newest first by default, with the " +
-    "same columns as events(). Arguments: amplitude_id (BIGINT, from user_search), named max_events " +
+    "same columns as events(). Arguments: amplitude_id (`BIGINT`, from user_search), named max_events " +
     "(default 1000; pages 1,000 at a time with offset) and direction ('latest' default or 'earliest').",
   docMd: "## user_activity\n\nOne user's events, paged 1,000 at a time.",
   args: { amplitude_id: int64(), max_events: int32, direction: utf8() },
@@ -985,7 +999,6 @@ export const CHART_FUNCTIONS: VgiFunction[] = [
   sessionsPerUser,
   sessionLengthDistribution,
   userComposition,
-  realtimeActiveUsers,
   revenueLtv,
   userSearch,
   userActivity,

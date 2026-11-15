@@ -62,7 +62,10 @@ export const eventCategories = defineAmpCatalogTable(
       "Join to event_types.category on name.",
     docMd: "## event_categories\n\nOne row per event category in the tracking plan.",
     bucket: "taxonomy",
-    columns: [C.big("id", "Category id.", "id", false), C.str("name", "Category name.", "name")],
+    columns: [
+      C.str("id", "Amplitude's identifier of the category (opaque text).", "id", false),
+      C.str("name", "Category name as shown in the tracking plan, e.g. 'Conversion'.", "name"),
+    ],
     requests: () => [{ path: "/api/2/taxonomy/category" }],
     examples: [
       { sql: `SELECT id, name FROM ${Q}.event_categories ORDER BY name`, description: "Every event category" },
@@ -90,7 +93,11 @@ export const eventTypes = defineAmpCatalogTable(
     columns: [
       C.str("event_type", "Event type (name) as sent by the SDKs.", "event_type", false),
       C.str("display_name", "Display name shown in Amplitude charts.", "display_name"),
-      C.str("description", "Description from the tracking plan.", "description"),
+      C.str(
+        "description",
+        "Free-text description of the event from the tracking plan (NULL if undocumented).",
+        "description",
+      ),
       C.str("category", "Category name.", "category.name"),
       C.bool("is_active", "Whether the event is active (has recent data).", "is_active"),
       C.bool(
@@ -102,8 +109,8 @@ export const eventTypes = defineAmpCatalogTable(
       C.bool("is_hidden_from_persona_results", "Hidden from Personas results.", "is_hidden_from_persona_results"),
       C.bool("is_hidden_from_pathfinder", "Hidden from Pathfinder.", "is_hidden_from_pathfinder"),
       C.bool("is_hidden_from_timeline", "Hidden from the user timeline.", "is_hidden_from_timeline"),
-      C.strList("tags", "Tags.", "tags"),
-      C.str("owner", "Owner.", "owner"),
+      C.strList("tags", "Free-form labels attached to the event in the tracking plan.", "tags"),
+      C.str("owner", "Login (email) of the person responsible for the event.", "owner"),
     ],
     requests: () => [{ path: "/api/2/taxonomy/event", query: { showDeleted: "true" } }],
     examples: [
@@ -134,7 +141,7 @@ const EVENT_PROPERTY_COLUMNS = [
     false,
   ),
   C.str("event_property", "Property name.", "event_property", false),
-  C.str("description", "Description.", "description"),
+  C.str("description", "Free-text description of the property from the tracking plan.", "description"),
   C.str("type", "Data type: string, number, boolean, enum, any …", "type"),
   C.str("regex", "Validation regular expression.", "regex"),
   C.strList("enum_values", "Allowed values.", enumList),
@@ -193,7 +200,7 @@ export const userProperties = defineAmpCatalogTable(
     bucket: "taxonomy",
     columns: [
       C.str("user_property", "Property name.", "user_property", false),
-      C.str("description", "Description.", "description"),
+      C.str("description", "Free-text description of the user property.", "description"),
       C.str("type", "Data type.", "type"),
       C.str("regex", "Validation regular expression.", "regex"),
       C.strList("enum_values", "Allowed values.", enumList),
@@ -229,9 +236,14 @@ export const groupProperties = defineAmpCatalogTable(
     pushdown: "`group_type` (=, IN) → `group_type=`.",
     bucket: "taxonomy",
     columns: [
-      C.str("group_type", "Group type, e.g. 'org id'.", (r) => r.group_type ?? r.__ctx?.group_type),
+      C.str(
+        "group_type",
+        "Group type the property belongs to, e.g. 'org'.",
+        (r) => r.group_type ?? r.__ctx?.group_type ?? "",
+        false,
+      ),
       C.str("group_property", "Property name (grp: prefix).", "group_property", false),
-      C.str("description", "Description.", "description"),
+      C.str("description", "Free-text description of the group property.", "description"),
       C.str("type", "Data type.", "type"),
       C.str("regex", "Validation regular expression.", "regex"),
       C.strList("enum_values", "Allowed values.", enumList),
@@ -256,7 +268,7 @@ export const groupProperties = defineAmpCatalogTable(
     ],
   },
   MAIN,
-  [],
+  ["group_type", "group_property"],
 );
 
 // ------------------------------------------------------------------ event list
@@ -275,8 +287,8 @@ export const eventTotals = defineAmpCatalogTable(
     docMd: "## event_totals\n\nOne row per visible event type with this week's total.",
     columns: [
       C.str("event_type", "Event type (name).", (r) => r.value ?? r.name, false),
-      C.str("display_name", "Display name.", "display"),
-      C.big("totals_this_week", "Events of this type so far this week.", "totals"),
+      C.str("display_name", "Name shown in Amplitude charts (may differ from the raw event type).", "display"),
+      C.big("totals_this_week", "Count of events of this type received so far this week.", "totals"),
       C.bool("is_hidden", "Hidden in charts.", "hidden"),
       C.bool("is_deleted", "Deleted.", "deleted"),
       C.bool("is_non_active", "Marked inactive.", "non_active"),
@@ -312,33 +324,33 @@ export const cohorts = defineAmpCatalogTable(
       "Every behavioral cohort in the project (GET /api/3/cohorts?includeSyncInfo=true): id, name, " +
       "description, size, type, archived, published, finished, hidden, is_predictive, is_official_content, " +
       "owners, viewers, created_at, last_modified, last_computed, last_viewed, view_count, popularity, " +
-      "chart_id, definition (JSON) and sync_metadata (JSON: target, frequency, last_successful …). Members " +
+      "source_chart_id, definition (JSON) and sync_metadata (JSON: target, frequency, last_successful …). Members " +
       "are read with cohort_members(cohort_id).",
     docMd: "## cohorts\n\nOne row per behavioral cohort.",
     columns: [
-      C.str("id", "Cohort id (use with cohort_members).", "id", false),
+      C.str("id", "Amplitude's cohort identifier (pass it to cohort_members).", "id", false),
       C.str("name", "Cohort name.", "name"),
-      C.str("description", "Description.", "description"),
-      C.big("size", "Number of users at the last computation.", "size"),
+      C.str("description", "Free-text description written by the cohort's owner.", "description"),
+      C.big("size", "Count of users in the cohort at its last computation.", "size"),
       C.str("type", "Cohort type.", "type"),
-      C.bool("archived", "Archived.", "archived"),
-      C.bool("published", "Published.", "published"),
+      C.bool("archived", "True once the cohort has been archived (no longer recomputed).", "archived"),
+      C.bool("published", "True when the cohort is shared with the whole organization.", "published"),
       C.bool("finished", "Computation finished.", "finished"),
-      C.bool("hidden", "Hidden.", "hidden"),
+      C.bool("hidden", "True when the cohort is hidden from cohort lists.", "hidden"),
       C.bool("is_predictive", "A predictive cohort.", "is_predictive"),
       C.bool("is_official_content", "Marked official.", "is_official_content"),
       C.strList("owners", "Owner logins.", "owners"),
       C.strList("viewers", "Viewer logins.", "viewers"),
       C.epochSec("created_at", "Created.", "createdAt"),
-      C.epochSec("last_modified", "Last modified.", "lastMod"),
-      C.epochSec("last_computed", "Last computed.", "lastComputed"),
-      C.epochSec("last_viewed", "Last viewed.", "last_viewed"),
-      C.big("view_count", "Times viewed.", "view_count"),
-      C.big("popularity", "Popularity score.", "popularity"),
-      C.str("chart_id", "Chart the cohort was created from.", "chart_id"),
-      C.str("edit_id", "Edit id.", "edit_id"),
+      C.epochSec("last_modified", "When the cohort definition was last changed.", "lastMod"),
+      C.epochSec("last_computed", "When Amplitude last recomputed the membership.", "lastComputed"),
+      C.epochSec("last_viewed", "When someone last opened the cohort.", "last_viewed"),
+      C.big("view_count", "Number of times the cohort has been viewed.", "view_count"),
+      C.big("popularity", "Amplitude's popularity score (a unitless ranking value).", "popularity"),
+      C.str("source_chart_id", "Chart the cohort was created from, if any.", "chart_id"),
+      C.str("edit_id", "Identifier of the cohort's current revision.", "edit_id"),
       C.str("location_id", "Space / location id.", "location_id"),
-      C.big("app_id", "Project id.", "appId"),
+      C.str("app_id", "Identifier of the Amplitude project the cohort belongs to.", "appId"),
       C.strList("metadata", "Metadata tags.", "metadata"),
       C.json("definition", "Cohort definition (JSON).", "definition"),
       C.json("sync_metadata", "Sync targets (JSON array).", "syncMetadata"),
@@ -375,20 +387,19 @@ export const annotations = defineAmpCatalogTable(
     keywords: "amplitude, annotations, chart annotations, releases, launches, incidents",
     docLlm:
       "Chart annotations (GET /api/3/annotations): id, label, details, start_time, end_time (NULL for a point " +
-      "annotation), category_id, category_name and chart_id (NULL for a global annotation). Use them to " +
+      "annotation), category_name and chart_id (NULL for a global annotation). Use them to " +
       "explain jumps in charts. WHERE chart_id = … or category_name = … and a lower bound on start_time push " +
       "down. Amplitude's Releases are created through a write-only API and appear here only as annotations.",
     docMd: "## annotations\n\nOne row per chart annotation.",
     pushdown:
       "`chart_id =` → `chart_id=`; otherwise `category_name =` → `category=`; `start_time >=/>` → `start=` (widened a minute).",
     columns: [
-      C.big("id", "Annotation id.", "id", false),
-      C.str("label", "Label.", "label"),
-      C.str("details", "Details.", "details"),
+      C.str("id", "Amplitude's identifier of the annotation (opaque text).", "id", false),
+      C.str("label", "Short text shown on the chart, e.g. 'v3.2'.", "label"),
+      C.str("details", "Longer free-text explanation of the annotation.", "details"),
       C.time("start_time", "When the annotation starts.", (r) => r.start ?? r.date),
       C.time("end_time", "When a ranged annotation ends (NULL for a point).", "end"),
-      C.big("category_id", "Category id.", "category.id"),
-      C.str("category_name", "Category name.", "category.name"),
+      C.str("category_name", "Annotation category, e.g. 'Releases' or 'Incidents'.", "category.name"),
       C.str("chart_id", "Chart the annotation is limited to (NULL = all charts).", "chart_id"),
     ],
     requests: ({ constraints }) => {
@@ -422,21 +433,21 @@ export const annotations = defineAmpCatalogTable(
 export const unifiedCohorts = defineAmpCatalogTable(
   {
     name: "cohorts",
-    description: "Cohorts in the shared product-analytics shape (tool, cohort_id, name, size, timestamps, definition)",
-    title: "Cohorts (Shared Shape)",
+    description: "Cohorts in the shared product-analytics shape (tool, id, name, size, timestamps, definition)",
+    title: "Shared Cohorts",
     category: "unified",
     keywords: "product analytics, cohorts, unified, amplitude, mixpanel, segment, posthog",
     docLlm:
-      "Amplitude behavioral cohorts with the shared product-analytics columns (tool, cohort_id, name, " +
+      "Amplitude behavioral cohorts with the shared product-analytics columns (tool, id, name, " +
       "description, size, created_at, updated_at, is_archived, definition JSON), so they UNION ALL with the " +
       "same table of other analytics workers. Use amplitude.main.cohorts for every Amplitude field.",
     docMd: "## unified.cohorts\n\nAmplitude cohorts in the shared product-analytics shape.",
     columns: [
       tool,
-      C.str("cohort_id", "Cohort id.", "id", false),
+      C.str("id", "The tool's identifier of the cohort.", "id", false),
       C.str("name", "Cohort name.", "name"),
-      C.str("description", "Description.", "description"),
-      C.big("size", "Members at the last computation.", "size"),
+      C.str("description", "Free-text description of the cohort.", "description"),
+      C.big("size", "Count of members at the last computation.", "size"),
       C.epochSec("created_at", "Created.", "createdAt"),
       C.epochSec("updated_at", "Last modified.", "lastMod"),
       C.bool("is_archived", "Archived.", "archived"),
@@ -447,7 +458,7 @@ export const unifiedCohorts = defineAmpCatalogTable(
     examples: [{ sql: `SELECT tool, name, size FROM ${U}.cohorts ORDER BY size DESC`, description: "Cohorts by size" }],
   },
   UNIFIED,
-  ["cohort_id"],
+  ["id"],
 );
 
 /** Join /api/2/events/list volumes with the taxonomy (category, description) by event name. */
@@ -495,7 +506,7 @@ export const unifiedEventDefinitions = defineAmpCatalogTable(
   {
     name: "event_definitions",
     description: "Event definitions in the shared product-analytics shape (name, description, category, volume)",
-    title: "Event Definitions (Shared Shape)",
+    title: "Shared Event Definitions",
     category: "unified",
     keywords: "product analytics, event definitions, tracking plan, unified, amplitude",
     docLlm:
@@ -505,14 +516,14 @@ export const unifiedEventDefinitions = defineAmpCatalogTable(
     docMd: "## unified.event_definitions\n\nEvent types in the shared product-analytics shape.",
     columns: [
       tool,
-      C.str("event_name", "Event name.", "event_name", false),
-      C.str("display_name", "Display name.", "display_name"),
-      C.str("description", "Description.", "description"),
-      C.str("category", "Category.", "category"),
+      C.str("event_name", "Event name exactly as the SDKs send it.", "event_name", false),
+      C.str("display_name", "Human-friendly name shown in the tool's UI.", "display_name"),
+      C.str("description", "Free-text description from the tracking plan.", "description"),
+      C.str("category", "Tracking-plan category the event is filed under.", "category"),
       C.bool("is_hidden", "Hidden in the tool's UI.", "is_hidden"),
       C.bool("is_active", "Receiving data.", "is_active"),
       C.big("volume", "Recent volume (Amplitude: events this week).", "volume"),
-      C.strList("tags", "Tags.", "tags"),
+      C.strList("tags", "Free-form labels from the tracking plan.", "tags"),
     ],
     requests: () => [{ path: "/api/2/events/list" }],
     expand: (rows, _req, { cfg }) => withTaxonomy(rows, cfg),
@@ -531,7 +542,7 @@ export const unifiedPropertyDefinitions = defineAmpCatalogTable(
   {
     name: "property_definitions",
     description: "Event, user and group property definitions in the shared product-analytics shape",
-    title: "Property Definitions (Shared Shape)",
+    title: "Shared Property Definitions",
     category: "unified",
     keywords: "product analytics, property definitions, tracking plan, unified, amplitude",
     docLlm:
@@ -544,13 +555,18 @@ export const unifiedPropertyDefinitions = defineAmpCatalogTable(
     bucket: "taxonomy",
     columns: [
       tool,
-      C.str("property_name", "Property name.", (r) => r.event_property ?? r.user_property ?? r.group_property, false),
+      C.str(
+        "property_name",
+        "Property key exactly as sent in event or user properties.",
+        (r) => r.event_property ?? r.user_property ?? r.group_property,
+        false,
+      ),
       C.str("scope", "'event', 'user' or 'group'.", (r) => r.__ctx?.scope, false),
       C.str("event_name", "Event the property belongs to (event scope; NULL when shared).", (r) =>
         r.__ctx?.scope === "event" ? (r.__ctx?.event_type ?? r.event_type ?? null) : null,
       ),
-      C.str("data_type", "Data type.", "type"),
-      C.str("description", "Description.", "description"),
+      C.str("data_type", "Declared value type: string, number, boolean, enum …", "type"),
+      C.str("description", "Free-text description from the tracking plan.", "description"),
       C.bool("is_array", "Array-valued.", "is_array_type"),
       C.bool("is_required", "Required.", "is_required"),
       C.bool("is_hidden", "Hidden.", "is_hidden"),

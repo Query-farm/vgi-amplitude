@@ -128,8 +128,9 @@ export const UNIFIED_DOC_LLM =
 
 export const UNIFIED_DOC_MD =
   "## unified\n\n" +
-  "Amplitude data in the shared product-analytics vocabulary.\n\n" +
-  "The same columns exist in the other analytics workers, so `UNION ALL` combines tools.";
+  "Amplitude data in the shared product-analytics vocabulary: raw events, people, cohorts and the tracking " +
+  "plan with the same column names and types as the other analytics workers (Mixpanel, Segment, PostHog).\n\n" +
+  "Every row carries `tool`, so `UNION ALL` combines tools. Use schema `main` for Amplitude-only fields.";
 
 export const AGENT_TEST_TASKS = [
   { name: "top_event_types", prompt: "Which three event types have the most events this week in Amplitude?" },
@@ -161,6 +162,40 @@ export const AGENT_TEST_TASKS = [
     name: "november_annotations",
     prompt: "Which chart annotations start in November 2026, in order?",
   },
+  { name: "dau_nov2", prompt: "How many daily active users did Amplitude report for 2026-11-02?" },
+  { name: "avg_session_minutes", prompt: "What was the average session length, in minutes, on 2026-11-02?" },
+  { name: "pro_cohort_members", prompt: "How many members of the Power Buyers cohort are on the pro plan?" },
+  { name: "event_category_names", prompt: "What event categories does the Amplitude tracking plan define?" },
+  { name: "deleted_event_types", prompt: "Which event types in the tracking plan have been deleted?" },
+  { name: "org_group_properties", prompt: "Which group properties exist for the org group type?" },
+  { name: "realtime_now", prompt: "How many users were active in the latest 5-minute bucket today?" },
+  { name: "arpu_30d", prompt: "What was the 30-day ARPU of users acquired on 2026-11-01?" },
+  {
+    name: "top_session_bin",
+    prompt: "Which session-length bin had the most sessions between 2026-11-01 and 2026-11-07?",
+  },
+  { name: "sessions_per_user_nov1", prompt: "What was the average number of sessions per user on 2026-11-01?" },
+  {
+    name: "user_event_total",
+    prompt: "How many events are in the full activity stream of the user with Amplitude id 12345?",
+  },
+  { name: "platform_mix", prompt: "How many users were on each platform between 2026-11-01 and 2026-11-07?" },
+  { name: "search_user_prefix", prompt: "Which Amplitude ids belong to user ids starting with 'user_'?" },
+  { name: "shared_cohort_sizes", prompt: "Using the shared cross-tool cohorts table, list cohort names and sizes." },
+  {
+    name: "shared_undocumented_events",
+    prompt: "In the shared cross-tool event definitions, which events have no description?",
+  },
+  {
+    name: "shared_event_users",
+    prompt:
+      "Using the shared cross-tool events table, how many distinct people had events received between 2026-11-14 04:00 and 05:00 UTC?",
+  },
+  {
+    name: "shared_user_props",
+    prompt: "In the shared property definitions, how many user-scoped properties are there?",
+  },
+  { name: "shared_user_last_seen", prompt: "In the shared users shape, when was user_7 last seen?" },
 ];
 
 /** Bind-only probes: each binds the object and shows its columns without fetching (LIMIT 0). */

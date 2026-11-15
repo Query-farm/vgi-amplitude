@@ -209,7 +209,7 @@ export const cohortMembers: VgiFunction = defineTableFunction<Args, State>({
   argDocs: {
     cohort_id: "Cohort id from amplitude.main.cohorts (positional).",
     include_properties: "Include user properties in `properties` (named; default false; slower).",
-    property_keys: "Only these user properties (named), e.g. ['plan', 'country']; implies include_properties.",
+    property_keys: "User property names to include (named); setting it implies include_properties.",
     max_wait_seconds: "How long to wait for Amplitude to prepare the export (named; default 600).",
     poll_seconds: "Seconds between status polls (named; default 5).",
   },

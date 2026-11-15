@@ -48,11 +48,11 @@ export const unifiedEvents = defineExportTable(
   {
     name: "events",
     description: "Raw events in the shared product-analytics shape (tool, event_name, event_time, ids, properties)",
-    title: "Events (Shared Shape)",
+    title: "Shared Events",
     keywords: "product analytics, events, unified, amplitude, mixpanel, segment, posthog, union",
     docLlm:
       "Amplitude raw events (Export API) in the shared product-analytics shape: tool ('amplitude'), " +
-      "event_id, event_name, event_time, received_time, user_id, device_id, distinct_id (Amplitude id as " +
+      "uuid, event_name, event_time, received_time, user_id, device_id, distinct_id (Amplitude id as " +
       "text), session_id, insert_id, properties (JSON), user_properties (JSON), platform, os, country, city, " +
       "app_version, library, revenue. The same columns as the events table of the other analytics workers, " +
       "so they UNION ALL. Filter on event_time: it becomes the export's upload-hour range (late arrivals up " +
@@ -66,6 +66,7 @@ export const unifiedEvents = defineExportTable(
     withArgs: false,
     category: "unified",
     uploadColumn: "received_time",
+    primaryKey: ["uuid"],
     examples: [
       {
         sql: "SELECT event_name, count(DISTINCT distinct_id) AS users FROM amplitude.unified.events WHERE event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00' GROUP BY event_name ORDER BY users DESC",
