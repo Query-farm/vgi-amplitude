@@ -59,10 +59,13 @@ export const unifiedEvents = defineExportTable(
       "to 24 h are read); with no lower bound only the last 24 hours are read. For tuning arguments use " +
       "amplitude.main.events().",
     docMd: "## unified.events\n\nAmplitude events in the shared product-analytics shape.",
-    pushdown: PUSHDOWN.replace("last lookback_hours", "last 24 hours").replace("late_hours", "24 h"),
+    pushdown: PUSHDOWN.replace("server_upload_time", "received_time")
+      .replace("last lookback_hours", "last 24 hours")
+      .replace("late_hours", "24 h"),
     columns: UNIFIED_EVENT_COLUMNS,
     withArgs: false,
     category: "unified",
+    uploadColumn: "received_time",
     examples: [
       {
         sql: "SELECT event_name, count(DISTINCT distinct_id) AS users FROM amplitude.unified.events WHERE event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00' GROUP BY event_name ORDER BY users DESC",

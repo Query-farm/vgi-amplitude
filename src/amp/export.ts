@@ -91,6 +91,7 @@ export function exportWindow(
   constraints: Constraint[],
   args: ExportArgs,
   nowMs: number,
+  uploadColumn = "server_upload_time",
 ): { startHour: number; endHour: number } {
   const nowHour = Math.floor(nowMs / HOUR_MS);
   let start: number | undefined;
@@ -99,7 +100,7 @@ export function exportWindow(
     const h = Math.floor(hi / HOUR_MS);
     return strict && hi % HOUR_MS === 0 ? h - 1 : h;
   };
-  const up = msBounds(constraints, "server_upload_time");
+  const up = msBounds(constraints, uploadColumn);
   if (up.lo !== undefined) start = Math.floor(up.lo / HOUR_MS);
   if (up.hi !== undefined) end = lastHour(up.hi, up.hiStrict ?? false);
   const ev = msBounds(constraints, "event_time");
@@ -237,6 +238,8 @@ export interface ExportSpec {
   columns: Col[];
   examples: FnExample[];
   category?: Category;
+  /** The column holding server_upload_time (`received_time` in the shared shape). */
+  uploadColumn?: string;
   /** Named tuning arguments (the main.events function) or fixed defaults (catalog tables). */
   withArgs: boolean;
 }
@@ -292,7 +295,7 @@ export function defineExportScan(spec: ExportSpec, fnName: string): VgiFunction 
           late_hours: Number(params.args.late_hours ?? DEFAULT_EXPORT_ARGS.late_hours),
           chunk_hours: Number(params.args.chunk_hours ?? DEFAULT_EXPORT_ARGS.chunk_hours),
         };
-        const w = exportWindow(constraintsOf(params.pushdownFilters), a, Date.now());
+        const w = exportWindow(constraintsOf(params.pushdownFilters), a, Date.now(), spec.uploadColumn);
         log.debug(
           `${fnName}: pushed ${formatPushedFilters(params.pushdownFilters)} → upload hours ${hourParam(w.startHour)}..${hourParam(w.endHour)}`,
         );

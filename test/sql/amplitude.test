@@ -1,148 +1,576 @@
 # name: test/sql/amplitude.test
-# description: SQL-level tests for the amplitude worker, run through DuckDB by ci/run-integration.sh
+# description: SQL tests for the amplitude worker against the strict Amplitude replay server (test/mock_api/server.py)
 # group: [amplitude]
-# managed-by: vgi-starters (edit upstream in shared/, then run tools/render.py)
 
 require vgi
 
 require-env AMPLITUDE_WORKER
 
-require-env AMPLITUDE_MOCK_API
+require-env AMPLITUDE_FIXTURE_URL
 
-require-env AMPLITUDE_MOCK_API_AUTH
+# httpfs + json read the replay server's /__requests log to assert what was pushed down.
+statement ok
+LOAD httpfs;
+
+statement ok
+LOAD json;
 
 statement ok
 ATTACH 'amplitude' (TYPE vgi, LOCATION '{AMPLITUDE_WORKER}');
 
-# ---------------------------------------------------------------- greet (scalar)
+# ---------------------------------------------------------------- secret errors
 
-query T
-SELECT amplitude.main.greet('Ada');
-----
-Hi, Ada!
-
-query T
-SELECT amplitude.main.greet('Ada', 'formal');
-----
-Good day, Ada.
-
-# NULL in, NULL out.
-query T
-SELECT amplitude.main.greet(NULL);
-----
-NULL
-
-# Works over a whole column, one result per row.
-query T
-SELECT amplitude.main.greet(name) FROM (VALUES ('Ada'), ('Grace'), (NULL)) AS t(name) ORDER BY ALL NULLS LAST;
-----
-Hi, Ada!
-Hi, Grace!
-NULL
-
-# `style` is constrained to 'casual' | 'formal' and checked when the query is bound.
-# (No expected message: each SDK words constraint errors its own way.)
 statement error
-SELECT amplitude.main.greet('Ada', 'loud');
+SELECT count(*) FROM amplitude.main.cohorts;
 ----
-<REGEX>:.*
+<REGEX>:.*no amplitude secret.*
 
-# ------------------------------------------------------ sequence_table (table fn)
+statement ok
+CREATE SECRET amp_bad (TYPE amplitude, API_KEY 'test-api-key', SECRET_KEY 'wrong', BASE_URL '{AMPLITUDE_FIXTURE_URL}');
 
-query II
-SELECT n, squared FROM amplitude.main.sequence_table(4) ORDER BY n;
+statement error
+SELECT count(*) FROM amplitude.main.cohorts;
 ----
-0	0
-1	1
-2	4
-3	9
+<REGEX>:.*HTTP 403.*Invalid API key.*
 
-# Named argument with a default.
+statement ok
+DROP SECRET amp_bad;
+
+statement ok
+CREATE SECRET amp_half (TYPE amplitude, API_KEY 'test-api-key', BASE_URL '{AMPLITUDE_FIXTURE_URL}');
+
+statement error
+SELECT count(*) FROM amplitude.main.cohorts;
+----
+<REGEX>:.*SECRET_KEY are both required.*
+
+statement ok
+DROP SECRET amp_half;
+
+statement ok
+CREATE SECRET amp_insecure (TYPE amplitude, API_KEY 'k', SECRET_KEY 's', BASE_URL 'http://amplitude.com');
+
+statement error
+SELECT count(*) FROM amplitude.main.cohorts;
+----
+<REGEX>:.*https.*
+
+statement ok
+DROP SECRET amp_insecure;
+
+statement ok
+CREATE SECRET amp_region (TYPE amplitude, API_KEY 'k', SECRET_KEY 's', REGION 'mars');
+
+statement error
+SELECT count(*) FROM amplitude.main.cohorts;
+----
+<REGEX>:.*REGION must be 'us' or 'eu'.*
+
+statement ok
+DROP SECRET amp_region;
+
+# Basic auth with the wrong secret key was recorded as auth=bad.
 query I
-SELECT n FROM amplitude.main.sequence_table(3, step := 5) ORDER BY n;
+SELECT count(*) > 0 FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/3/cohorts') WHERE auth = 'bad';
+----
+true
+
+statement ok
+CREATE SECRET amp (TYPE amplitude, API_KEY 'test-api-key', SECRET_KEY 'test-secret-key', BASE_URL '{AMPLITUDE_FIXTURE_URL}');
+
+# Both keys are redacted in duckdb_secrets().
+query I
+SELECT secret_string NOT LIKE '%test-secret-key%' AND secret_string NOT LIKE '%test-api-key%' FROM duckdb_secrets() WHERE name = 'amp';
+----
+true
+
+# ------------------------------------------------------------ events (Export API)
+
+# One UTC day: the event_time range becomes upload hours [2026-11-13T23, ...]; the first
+# 24-hour chunk is "too large" (the replay server's limit is 12 hours) and is halved.
+query ITR
+SELECT count(*), event_type, sum(revenue) FROM amplitude.main.events()
+WHERE event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00'
+GROUP BY event_type ORDER BY event_type;
+----
+25001	Page View	NULL
+5	Purchase	75.99
+2	Sign Up	NULL
+
+# The first Export API request was answered 429 and retried.
+query I
+SELECT count(*) >= 2 FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export') r
+WHERE query = (SELECT query FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export') ORDER BY seq LIMIT 1);
+----
+true
+
+# The window started one hour before the day (clock skew) and the 24-hour chunk was halved.
+query II
+SELECT count(*) FILTER (WHERE query = '{"end": "20261114T22", "start": "20261113T23"}') >= 1,
+       count(*) FILTER (WHERE query = '{"end": "20261114T10", "start": "20261113T23"}') = 1
+FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export');
+----
+true	true
+
+# Revenue: $revenue, else $price x $quantity (user_7's 5 x 3 = 15).
+query TR
+SELECT country, sum(revenue) FROM amplitude.main.events()
+WHERE event_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-15 00:00:00+00' AND event_type = 'Purchase'
+GROUP BY country ORDER BY country;
+----
+Germany	25.0
+United States	50.99
+
+# A late upload: the 20:00 event was uploaded five hours later and is found through late_hours.
+query TTT
+SELECT user_id, event_time, server_upload_time FROM amplitude.main.events()
+WHERE event_time >= TIMESTAMPTZ '2026-11-13 20:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-13 21:00:00+00';
+----
+user_9	2026-11-13 20:00:00+00	2026-11-14 01:10:00+00
+
+# late_hours := 0 reads only the same hours (404 = no export files) and misses it.
+query I
+SELECT count(*) FROM amplitude.main.events(late_hours := 0)
+WHERE event_time >= TIMESTAMPTZ '2026-11-13 20:00:00+00' AND event_time < TIMESTAMPTZ '2026-11-13 21:00:00+00';
 ----
 0
-5
-10
-
-# Larger than one batch: the cursor must carry across process calls.
-query II
-SELECT count(*), max(n) FROM amplitude.main.sequence_table(25000);
-----
-25000	24999
 
 query I
-SELECT count(*) FROM amplitude.main.sequence_table(0);
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export')
+WHERE query = '{"end": "20261113T20", "start": "20261113T19"}';
+----
+1
+
+# server_upload_time maps to the export hours exactly: one request for one hour of
+# 25,000 events (three files, three Arrow batches).
+query II
+SELECT count(*), count(DISTINCT user_id) FROM amplitude.main.events()
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 03:00:00+00' AND server_upload_time < TIMESTAMPTZ '2026-11-14 04:00:00+00';
+----
+25000	100
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export')
+WHERE query = '{"end": "20261114T03", "start": "20261114T03"}';
+----
+1
+
+# Microsecond precision, inclusive and exclusive bounds.
+query II
+SELECT count(*) FILTER (WHERE event_time <= TIMESTAMPTZ '2026-11-14 05:59:59.999999+00'),
+       count(*) FILTER (WHERE event_time < TIMESTAMPTZ '2026-11-14 05:59:59.999999+00')
+FROM amplitude.main.events()
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 05:00:00+00' AND server_upload_time < TIMESTAMPTZ '2026-11-14 06:00:00+00';
+----
+1	0
+
+# Typed columns: ids, session (-1 → NULL), JSON properties, insert id, timestamps.
+query TTIITTT
+SELECT event_type, user_id, amplitude_id, session_id, insert_id, event_properties->>'path', user_properties->>'plan'
+FROM amplitude.main.events()
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 01:00:00+00' AND server_upload_time < TIMESTAMPTZ '2026-11-14 02:00:00+00'
+ORDER BY event_time;
+----
+Purchase	user_9	999	1794600000000	ins-7	NULL	pro
+Purchase	user_7	777	1794619200000	ins-5	NULL	free
+Page View	NULL	5555	NULL	ins-6	/pricing	free
+
+# Projection: only the needed columns are built, the rest stay typed.
+query TTT
+SELECT typeof(event_time), typeof(event_properties), typeof(location_lat) FROM amplitude.main.events()
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 05:00:00+00' AND server_upload_time < TIMESTAMPTZ '2026-11-14 06:00:00+00';
+----
+TIMESTAMP WITH TIME ZONE	JSON	DOUBLE
+
+# A range with no export files at all (404) is zero rows, not an error.
+query I
+SELECT count(*) FROM amplitude.main.events()
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 02:00:00+00' AND server_upload_time < TIMESTAMPTZ '2026-11-14 03:00:00+00';
 ----
 0
 
-# count is constrained to [0, 1000000].
+# chunk_hours := 1 reads hour by hour (T04 and T05); the T05 event, uploaded at 05:59:59,
+# is outside the exact bound.
+query I
+SELECT count(*) FROM amplitude.main.events(chunk_hours := 1)
+WHERE server_upload_time >= TIMESTAMPTZ '2026-11-14 04:00:00+00' AND server_upload_time <= TIMESTAMPTZ '2026-11-14 05:30:00+00';
+----
+2
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export')
+WHERE query IN ('{"end": "20261114T04", "start": "20261114T04"}', '{"end": "20261114T05", "start": "20261114T05"}');
+----
+4
+
 statement error
-SELECT * FROM amplitude.main.sequence_table(-1);
+SELECT count(*) FROM amplitude.main.events(chunk_hours := 0);
 ----
-<REGEX>:.*
+<REGEX>:.*chunk_hours.*
 
-# Named arguments are constrained too: step >= 1.
+# ------------------------------------------------------------- unified.events
+
+query TTTTTR
+SELECT tool, event_name, user_id, distinct_id, session_id, revenue FROM amplitude.unified.events
+WHERE received_time >= TIMESTAMPTZ '2026-11-14 00:00:00+00' AND received_time < TIMESTAMPTZ '2026-11-14 01:00:00+00'
+ORDER BY event_time;
+----
+amplitude	Sign Up	user_42	12345	1794614700000	NULL
+amplitude	Purchase	user_42	12345	1794615000000	19.99
+amplitude	Purchase	user_7	777	1794615600000	15.0
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/export')
+WHERE query = '{"end": "20261114T00", "start": "20261114T00"}';
+----
+1
+
+# --------------------------------------------------------------- segmentation
+
+query ITTRR
+SELECT series_index, series_label, period, value, series_total FROM amplitude.main.segmentation('Purchase', DATE '2026-11-01', DATE '2026-11-03') ORDER BY period;
+----
+0	NULL	2026-11-01	10.0	33.0
+0	NULL	2026-11-02	11.0	33.0
+0	NULL	2026-11-03	12.0	33.0
+
+query TR
+SELECT series_label, sum(value) FROM amplitude.main.segmentation('{"event_type":"Purchase"}', DATE '2026-11-01', DATE '2026-11-03', metric := 'totals', group_by := ['country'], granularity := 'week')
+GROUP BY ALL ORDER BY ALL;
+----
+Germany	12.0
+United States	18.0
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/events/segmentation')
+WHERE query = '{"e": "{\"event_type\":\"Purchase\"}", "end": "20261103", "g": "country", "i": "7", "m": "totals", "start": "20261101"}';
+----
+1
+
 statement error
-SELECT * FROM amplitude.main.sequence_table(3, step := 0);
+SELECT * FROM amplitude.main.segmentation('Purchase', DATE '2026-11-01', DATE '2026-11-03', metric := 'formula');
 ----
-<REGEX>:.*
+<REGEX>:.*formula is required.*
 
-# ------------------------------------------------- fetch_items (REST table fn)
-
-query IIT
-SELECT count(*), sum(id), min(name) FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API}', page_size := 4);
+statement error
+SELECT * FROM amplitude.main.segmentation('{"nope": 1}', DATE '2026-11-01', DATE '2026-11-03');
 ----
-25	325	item-01
+<REGEX>:.*event_type.*
+
+statement error
+SELECT * FROM amplitude.main.segmentation('Purchase', DATE '2026-11-01', DATE '2026-11-03', metric := 'bogus');
+----
+<REGEX>:.*metric.*
+
+# ------------------------------------------------------------------- funnel
+
+query ITIRRR
+SELECT step, event_type, users, conversion_rate, step_conversion_rate, median_seconds FROM amplitude.main.funnel(['Sign Up', 'Purchase', 'Page View'], DATE '2026-11-01', DATE '2026-11-07', mode := 'unordered', conversion_seconds := 86400) ORDER BY step;
+----
+1	Sign Up	1000	1.0	1.0	0.0
+2	Purchase	500	0.5	0.5	60.0
+3	Page View	250	0.25	0.5	120.0
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/funnels')
+WHERE query LIKE '%"cs": "86400"%' AND query LIKE '%"mode": "unordered"%' AND query LIKE '%"n": "active"%';
+----
+1
+
+# ---------------------------------------------------------------- retention
+
+query TIIIRT
+SELECT cohort, day, cohort_size, retained, retention_rate, incomplete FROM amplitude.main.retention('_new', '_all', DATE '2026-11-01', DATE '2026-11-07') ORDER BY cohort NULLS FIRST, day;
+----
+NULL	0	210	210	1.0	false
+NULL	1	210	105	0.5	false
+NULL	2	100	25	0.25	true
+2026-11-01	0	100	100	1.0	false
+2026-11-01	1	100	50	0.5	false
+2026-11-01	2	100	25	0.25	true
+2026-11-02	0	110	110	1.0	false
+2026-11-02	1	110	55	0.5	false
+2026-11-02	2	110	27	0.24545454545454545	true
+
+statement error
+SELECT * FROM amplitude.main.retention('_new', '_all', DATE '2026-11-01', DATE '2026-11-07', mode := 'bracket');
+----
+<REGEX>:.*brackets is required.*
+
+# ------------------------------------------------------------ other charts
+
+query TTI
+SELECT series_label, period, users FROM amplitude.main.active_users(DATE '2026-11-01', DATE '2026-11-02', group_by := 'country') ORDER BY ALL;
+----
+Germany	2026-11-01	250
+Germany	2026-11-02	251
+United States	2026-11-01	500
+United States	2026-11-02	501
 
 query TI
-SELECT category, count(*) FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API}') GROUP BY category ORDER BY category;
+SELECT period, users FROM amplitude.main.active_users(DATE '2026-11-01', DATE '2026-11-02', metric := 'new') ORDER BY period;
 ----
-hardware	8
-service	8
-software	9
+2026-11-01	50
+2026-11-02	51
 
-# The harness runs AMPLITUDE_MOCK_API with MOCK_API_FLAKY=1: every page answers
-# 429 + Retry-After once, so every query above also exercised the retry path.
-
-# AMPLITUDE_MOCK_API_AUTH requires a bearer token ('test-token'). Every language's
-# fetch_items must put the HTTP status code in its error message.
-statement error
-SELECT count(*) FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API_AUTH}');
+query TR
+SELECT period, avg_seconds FROM amplitude.main.average_session_length(DATE '2026-11-01', DATE '2026-11-02') ORDER BY period;
 ----
-401
+2026-11-01	600.0
+2026-11-02	660.0
 
-statement ok
-CREATE SECRET amplitude_api_test (TYPE amplitude_api, TOKEN 'test-token');
+query TR
+SELECT period, sessions_per_user FROM amplitude.main.sessions_per_user(DATE '2026-11-01', DATE '2026-11-02') ORDER BY period;
+----
+2026-11-01	2.5
+2026-11-02	3.5
+
+query ITI
+SELECT bin_index, bin, sessions FROM amplitude.main.session_length_distribution(DATE '2026-11-01', DATE '2026-11-02', bin_unit := 'seconds', bin_size := 60) ORDER BY bin_index;
+----
+0	0s-60s	0
+1	60s-120s	120
+2	120s-180s	45
+3	180s-240s	7
 
 query I
-SELECT count(*) FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API_AUTH}', page_size := 25);
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/sessions/length')
+WHERE query LIKE '%"timeHistogramConfigBinSize": "60"%' AND query LIKE '%"timeHistogramConfigBinTimeUnit": "seconds"%';
 ----
-25
+1
 
-# Several pages: the token must survive between batches (over HTTP each batch is a
-# separate request, so a token kept only in memory is lost after page 1).
+query TI
+SELECT value, users FROM amplitude.main.user_composition(DATE '2026-11-01', DATE '2026-11-07', 'platform') ORDER BY users DESC;
+----
+Web	700
+iOS	250
+(none)	50
+
+query TTI
+SELECT series_label, time_of_day, users FROM amplitude.main.realtime_active_users() WHERE series_label = 'Today' ORDER BY time_of_day;
+----
+Today	15:00	123
+Today	15:05	144
+Today	15:10	101
+
+query TIRIIR
+SELECT cohort_date, day, value, cohort_users, paying_users, total_amount FROM amplitude.main.revenue_ltv(DATE '2026-11-01', DATE '2026-11-02', metric := 'total_revenue') WHERE day IN (1, 30) ORDER BY ALL;
+----
+2026-11-01	1	1.5	100	12	950.0
+2026-11-01	30	9.5	100	12	950.0
+2026-11-02	1	1.5	100	12	950.0
+2026-11-02	30	10.5	100	12	950.0
+
 query I
-SELECT count(*) FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API_AUTH}', page_size := 7);
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/revenue/ltv') WHERE query LIKE '%"m": "2"%';
 ----
-25
+1
 
+# -------------------------------------------------------------------- users
+
+query ITT
+SELECT amplitude_id, user_id, match_type FROM amplitude.main.user_search('user_') ORDER BY amplitude_id;
+----
+777	user_7	match_user_or_device_id
+12345	user_42	match_user_or_device_id
+
+query I
+SELECT count(*) FROM amplitude.main.user_search('nobody');
+----
+0
+
+# 2,500 events page 1,000 at a time (offset 0, 1000, 2000); max_events caps the scan.
+query IIT
+SELECT count(*), count(DISTINCT uuid), max(event_type) FROM amplitude.main.user_activity(12345, max_events := 2200);
+----
+2200	2200	Purchase
+
+query I
+SELECT count(*) FROM amplitude.main.user_activity(12345, max_events := 100000);
+----
+2500
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/useractivity') WHERE query LIKE '%"offset": "2000"%' AND query LIKE '%"limit": "200"%';
+----
+1
+
+query ITITTT
+SELECT amplitude_id, user_id, num_events, merged_amplitude_ids, last_used, properties->>'plan' FROM amplitude.main.user_profile('user_42');
+----
+12345	user_42	2504	[11111]	2026-11-14 00:00:00+00	pro
+
+query TTTTTT
+SELECT tool, user_id, distinct_id, device_ids, first_seen, country FROM amplitude.unified.users('user_') ORDER BY user_id;
+----
+amplitude	user_42	12345	[d42]	2026-01-02 00:00:00+00	United States
+amplitude	user_7	777	[d7]	2026-11-14 00:00:00+00	Germany
+
+# ----------------------------------------------------------------- taxonomy
+
+query IT
+SELECT id, name FROM amplitude.main.event_categories ORDER BY id;
+----
+412931	Attribution
+412941	Conversion
+
+query TTTTT
+SELECT event_type, category, description, is_deleted, tags FROM amplitude.main.event_types ORDER BY event_type;
+----
+Old Checkout	Conversion	NULL	true	[]
+Page View	Attribution	Any page view.	false	[]
+Planned Event	Conversion	Planned, not yet sent.	false	[]
+Purchase	Conversion	A completed checkout.	false	[revenue]
+Sign Up	Conversion	NULL	false	[]
+
+query TTTT
+SELECT event_property, type, is_required, enum_values FROM amplitude.main.event_properties WHERE event_type = 'Purchase' ORDER BY event_property;
+----
+$revenue	number	true	NULL
+coupon	enum	false	[SAVE10, FREESHIP]
+sku	string	false	NULL
+
+# The event_type filter pushed down: exactly one taxonomy request for it, no listing.
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/taxonomy/event-property') WHERE query = '{"event_type": "Purchase"}';
+----
+1
+
+query TTT
+SELECT event_type, is_shared, event_property FROM amplitude.main.event_properties WHERE list_contains(classifications, 'PII');
+----
+NULL	true	email
+
+query TT
+SELECT user_property, enum_values FROM amplitude.main.user_properties WHERE NOT is_deleted ORDER BY user_property;
+----
+device_id	NULL
+email	NULL
+plan	[free, pro]
+
+query TT
+SELECT group_type, group_property FROM amplitude.main.group_properties WHERE group_type = 'org';
+----
+org	grp:tier
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/taxonomy/group-property') WHERE query = '{"group_type": "org"}';
+----
+1
+
+query TIT
+SELECT event_type, totals_this_week, is_hidden FROM amplitude.main.event_totals ORDER BY totals_this_week DESC LIMIT 2;
+----
+Page View	250000	false
+Purchase	4000	false
+
+# ------------------------------------------------------------------ cohorts
+
+query TTIT
+SELECT id, name, size, created_at FROM amplitude.main.cohorts ORDER BY id;
+----
+coh_old	Old Trial	40	2023-07-22 04:26:40+00
+coh_power	Power Buyers	12000	2025-01-01 00:00:00+00
+
+query T
+SELECT sync_metadata->0->>'target' FROM amplitude.main.cohorts WHERE id = 'coh_power';
+----
+braze
+
+# Async export: request → poll (in progress, then completed) → 302 to a pre-signed link on
+# another origin, fetched without credentials. 12,000 members = two batches.
+query III
+SELECT count(*), count(user_id), count(*) FILTER (WHERE properties = '{}') FROM amplitude.main.cohort_members('coh_power', poll_seconds := 1);
+----
+12000	11999	12000
+
+query TIT
+SELECT properties->>'gp:plan', count(*), min(user_id) FROM amplitude.main.cohort_members('coh_power', property_keys := ['plan'], poll_seconds := 1) GROUP BY ALL ORDER BY ALL;
+----
+free	8999	u1
+pro	3001	u0
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/5/cohorts/request/coh_power') WHERE query LIKE '%"propKeys": "plan"%' AND query LIKE '%"props": "1"%';
+----
+1
+
+statement error
+SELECT count(*) FROM amplitude.main.cohort_members('missing', poll_seconds := 1);
+----
+<REGEX>:.*HTTP 404.*
+
+# -------------------------------------------------------------- annotations
+
+query ITTT
+SELECT id, label, start_time, end_time FROM amplitude.main.annotations WHERE start_time >= TIMESTAMPTZ '2026-11-01 00:00:00+00' ORDER BY start_time;
+----
+2	Outage	2026-11-03 09:00:00+00	2026-11-03 11:30:00+00
+3	v3.2	2026-11-10 07:00:00+00	NULL
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/3/annotations') WHERE query = '{"start": "2026-10-31T23:59Z"}';
+----
+1
+
+query IT
+SELECT id, category_name FROM amplitude.main.annotations WHERE category_name = 'Releases' ORDER BY id;
+----
+1	Releases
+3	Releases
+
+query I
+SELECT id FROM amplitude.main.annotations WHERE chart_id = 'chart9' AND category_name = 'Releases';
+----
+3
+
+query I
+SELECT count(*) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/3/annotations') WHERE query = '{"chart_id": "chart9"}';
+----
+1
+
+# ----------------------------------------------------------------- unified
+
+query TTTI
+SELECT tool, cohort_id, name, size FROM amplitude.unified.cohorts ORDER BY cohort_id;
+----
+amplitude	coh_old	Old Trial	40
+amplitude	coh_power	Power Buyers	12000
+
+query TTTI
+SELECT event_name, category, is_active, volume FROM amplitude.unified.event_definitions ORDER BY event_name;
+----
+Legacy Event	NULL	false	0
+Page View	Attribution	true	250000
+Planned Event	Conversion	false	NULL
+Purchase	Conversion	true	4000
+Sign Up	Conversion	true	1200
+
+query TI
+SELECT scope, count(*) FROM amplitude.unified.property_definitions GROUP BY scope ORDER BY scope;
+----
+event	6
+group	2
+user	3
+
+# scope = 'user' skips the per-event requests.
 statement ok
-DROP SECRET amplitude_api_test;
+SELECT count(*) FROM amplitude.unified.property_definitions WHERE scope = 'user';
 
-# base_url must be http(s).
-statement error
-SELECT * FROM amplitude.main.fetch_items('ftp://example.com');
+query I
+SELECT max(seq) < (SELECT max(seq) FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/taxonomy/user-property'))
+FROM read_json('{AMPLITUDE_FIXTURE_URL}/__requests?path=/api/2/taxonomy/event-property');
 ----
-<REGEX>:.*
+true
 
-# page_size is a named argument constrained to [1, 1000].
-statement error
-SELECT * FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API}', page_size := 0);
+# UNION ALL across tools works on the shared columns.
+query TI
+SELECT tool, count(*) FROM (
+  SELECT tool, event_name, event_time FROM amplitude.unified.events
+  WHERE received_time >= TIMESTAMPTZ '2026-11-14 04:00:00+00' AND received_time < TIMESTAMPTZ '2026-11-14 05:00:00+00'
+  UNION ALL
+  SELECT 'other' AS tool, 'Purchase' AS event_name, TIMESTAMPTZ '2026-11-14 04:00:00+00' AS event_time
+) GROUP BY tool ORDER BY tool;
 ----
-<REGEX>:.*
-
-statement error
-SELECT * FROM amplitude.main.fetch_items('{AMPLITUDE_MOCK_API}', page_size := 5000);
-----
-<REGEX>:.*
+amplitude	2
+other	1

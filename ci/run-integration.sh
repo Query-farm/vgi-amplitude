@@ -71,13 +71,12 @@ start_server() {
   echo "::error::'$*' never printed PORT:<n>"; cat "$log"; return 1
 }
 
-# The mock APIs fetch_items is tested against. The plain one rate-limits every
-# page once (429 + Retry-After) so the retry path is always exercised.
-unset AMPLITUDE_API_TOKEN
-MOCK_API_FLAKY=1 start_server "$STAGE/mock.log" $PYTHON "$REPO/test/mock_api/server.py"
-export AMPLITUDE_MOCK_API="http://127.0.0.1:$PORT"
-MOCK_API_TOKEN=test-token start_server "$STAGE/mock-auth.log" $PYTHON "$REPO/test/mock_api/server.py"
-export AMPLITUDE_MOCK_API_AUTH="http://127.0.0.1:$PORT"
+# The strict Amplitude replay server (test/mock_api/server.py) every SQL test points its
+# `amplitude` secret at. It answers the first Export API request and the first
+# segmentation request with 429 (Retry-After: 1), and rejects export ranges over 12 hours
+# as "too large", so the retry and chunk-halving paths always run.
+start_server "$STAGE/mock.log" $PYTHON "$REPO/test/mock_api/server.py"
+export AMPLITUDE_FIXTURE_URL="http://127.0.0.1:$PORT"
 
 HTTP=0
 case "$TRANSPORT" in
