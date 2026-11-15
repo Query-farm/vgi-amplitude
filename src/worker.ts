@@ -1,13 +1,13 @@
 /**
  * The worker entry point.
  *
- *   bin/vgi-starter-worker                      # stdio: what DuckDB launches by default
- *   bin/vgi-starter-worker --http --port 8000   # HTTP: for Docker / hosted deploys
- *   bin/vgi-starter-worker --help
+ *   bin/vgi-amplitude-worker                      # stdio: what DuckDB launches by default
+ *   bin/vgi-amplitude-worker --http --port 8000   # HTTP: for Docker / hosted deploys
+ *   bin/vgi-amplitude-worker --help
  *
  * Attach it from DuckDB:
  *
- *   ATTACH 'starter' (TYPE vgi, LOCATION '/abs/path/to/bin/vgi-starter-worker');
+ *   ATTACH 'amplitude' (TYPE vgi, LOCATION '/abs/path/to/bin/vgi-amplitude-worker');
  */
 
 import { CATALOG } from "./catalog.ts";
