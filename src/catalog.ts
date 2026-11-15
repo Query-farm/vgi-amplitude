@@ -1,58 +1,105 @@
 /**
- * Assemble the functions into the catalog DuckDB attaches.
- *
- * To add a function: write it (see `greet.ts` / `sequence.ts` /
- * `fetch_items.ts`), then add it to `FUNCTIONS` below.
+ * Assemble the `amplitude` catalog: schema `main` (Amplitude's own objects),
+ * schema `unified` (the shared product-analytics vocabulary) and the `amplitude`
+ * secret type.
  */
 
-import type { CatalogDescriptor, VgiFunction } from "@query-farm/vgi";
-import { API_SECRET_TYPE, fetchItems } from "./fetch_items.ts";
-import { greet, greetWithStyle } from "./greet.ts";
-import { CATALOG_DOC_MD, CATALOG_NAME, CATALOG_TAGS, SCHEMA_DOC_MD, SCHEMA_TAGS, SOURCE_URL } from "./meta.ts";
-import { sequenceTable } from "./sequence.ts";
+import { type CatalogDescriptor, field, schema, utf8, type VgiFunction } from "@query-farm/vgi";
+import { CHART_FUNCTIONS, UNIFIED_FUNCTIONS } from "./amp/analytics.ts";
+import { SECRET_TYPE } from "./amp/client.ts";
+import { cohortMembers } from "./amp/cohort_members.ts";
+import { events, unifiedEvents } from "./amp/events.ts";
+import { MAIN_TABLES, UNIFIED_DEF_TABLES } from "./amp/resources.ts";
+import {
+  CATALOG_COMMENT,
+  CATALOG_NAME,
+  CATALOG_TAGS,
+  SCHEMA_DOC_MD,
+  SCHEMA_TAGS,
+  SOURCE_URL,
+  UNIFIED_DOC_MD,
+  UNIFIED_SCHEMA_TAGS,
+} from "./meta.ts";
 
-export const FUNCTIONS: VgiFunction[] = [greet, greetWithStyle, sequenceTable, fetchItems];
+export const FUNCTIONS: VgiFunction[] = [events, ...CHART_FUNCTIONS, cohortMembers];
+export const UNIFIED_TABLES = [unifiedEvents, ...UNIFIED_DEF_TABLES];
+
+const doc = (text: string) => new Map([["vgi_doc", text]]);
+const redacted = (text: string) =>
+  new Map([
+    ["redact", "true"],
+    ["vgi_doc", text],
+  ]);
+
+/** CREATE SECRET (TYPE amplitude, API_KEY '…', SECRET_KEY '…', REGION 'us' | 'eu', BASE_URL '…'). */
+export const AMPLITUDE_SECRET_TYPE = {
+  name: SECRET_TYPE,
+  description: "An Amplitude project's API key and secret key (HTTP Basic auth), plus its data region",
+  schema: schema(
+    [
+      field("api_key", utf8(), true, redacted("Project API key (Project settings > General).")),
+      field("secret_key", utf8(), true, redacted("Project secret key (Project settings > General).")),
+      field(
+        "region",
+        utf8(),
+        true,
+        doc("Data region: 'us' (default, https://amplitude.com) or 'eu' (https://analytics.eu.amplitude.com)."),
+      ),
+      field(
+        "base_url",
+        utf8(),
+        true,
+        doc(
+          "Override the API origin (a proxy or test server); wins over REGION. http:// only for 127.0.0.1/localhost.",
+        ),
+      ),
+    ],
+    new Map([["vgi_doc_url", "https://amplitude.com/docs/apis/authentication"]]),
+  ),
+};
 
 interface Example {
   description: string;
   sql: string;
 }
 
-/**
- * Publish each function's examples as `vgi.example_queries` (with descriptions).
- *
- * Overloads share one SQL name, so their examples are merged per name.
- * Returns every example, for the schema-level list.
- */
+/** Publish each function's examples as `vgi.example_queries`; return them all. */
 function stampExampleQueries(functions: VgiFunction[]): Example[] {
-  const byName = new Map<string, Example[]>();
+  const all: Example[] = [];
   for (const fn of functions) {
-    const bucket = byName.get(fn.meta.name) ?? [];
-    byName.set(fn.meta.name, bucket);
-    for (const ex of fn.meta.examples ?? []) {
-      if (!bucket.some((e) => e.sql === ex.sql)) bucket.push({ description: ex.description, sql: ex.sql });
-    }
+    const ex = (fn.meta.examples ?? []).map((e) => ({ description: e.description, sql: e.sql }));
+    fn.meta.tags = { ...fn.meta.tags, "vgi.example_queries": JSON.stringify(ex) };
+    all.push(...ex);
   }
-  for (const fn of functions) {
-    fn.meta.tags = { ...fn.meta.tags, "vgi.example_queries": JSON.stringify(byName.get(fn.meta.name)) };
-  }
-  return [...byName.values()].flat();
+  return all;
 }
 
-const ALL_EXAMPLES = stampExampleQueries(FUNCTIONS);
+const tableExamples = (tables: { tags?: Record<string, string> }[]) =>
+  tables.flatMap((t) => JSON.parse(t.tags?.["vgi.example_queries"] ?? "[]") as Example[]);
+
+const MAIN_EXAMPLES = [...stampExampleQueries(FUNCTIONS), ...tableExamples(MAIN_TABLES)];
+const UNIFIED_EXAMPLES = [...stampExampleQueries(UNIFIED_FUNCTIONS), ...tableExamples(UNIFIED_TABLES)];
 
 export const CATALOG: CatalogDescriptor = {
   name: CATALOG_NAME,
-  comment: CATALOG_DOC_MD,
+  comment: CATALOG_COMMENT,
   sourceUrl: SOURCE_URL,
   tags: CATALOG_TAGS,
-  secretTypes: [API_SECRET_TYPE],
+  secretTypes: [AMPLITUDE_SECRET_TYPE],
   schemas: [
     {
       path: ["main"],
       comment: SCHEMA_DOC_MD,
       functions: FUNCTIONS,
-      tags: { ...SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(ALL_EXAMPLES) },
+      tables: MAIN_TABLES,
+      tags: { ...SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(MAIN_EXAMPLES.slice(0, 12)) },
+    },
+    {
+      path: ["unified"],
+      comment: UNIFIED_DOC_MD,
+      functions: UNIFIED_FUNCTIONS,
+      tables: UNIFIED_TABLES,
+      tags: { ...UNIFIED_SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(UNIFIED_EXAMPLES) },
     },
   ],
 };
