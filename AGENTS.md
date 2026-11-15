@@ -22,19 +22,25 @@ Faster loops while iterating: `make test-unit`, `make test-sql`, `make lint-expl
 
 ```
 src/
-  worker.ts        # entry point: serves the catalog over stdio, --unix or --http
-  catalog.ts       # assembles the catalog; add new functions to FUNCTIONS
-  meta.ts          # catalog/schema metadata + helpers (objectTags, column)
-  greet.ts         # scalar example (overloads, const param with choices)
-  sequence.ts      # table function example (named args, streaming state)
-  fetch_items.ts   # REST API table function (pagination, retries, secrets)
-  cli.ts           # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
-  log.ts           # stderr logger
-bin/               # vgi-amplitude-worker (what DuckDB launches) and run-recipe
-tests/             # bun unit tests (worker subprocess + mock API)
+  worker.ts             # entry point: serves the catalog over stdio, --unix or --http
+  catalog.ts            # assembles the catalog (schemas main + unified) and the `amplitude` secret type
+  meta.ts               # catalog/schema metadata, categories, agent tasks + helpers
+  amp/client.ts         # Basic auth, region/base_url, retries, 429 back-off, per-project concurrency caps
+  amp/pushdown.ts       # pushed WHERE predicates -> constraints
+  amp/table.ts          # request-per-batch table factory, typed JSON columns, argument helpers
+  amp/zip.ts            # spool to disk, ZIP/ZIP64 central directory, streamed inflate+gunzip lines
+  amp/export.ts         # Export API scan: upload-hour window, chunk halving, resumable cursor
+  amp/events.ts         # main.events() and unified.events
+  amp/analytics.ts      # Dashboard REST charts, user search/activity/profile, unified.users
+  amp/resources.ts      # taxonomy, event totals, cohorts, annotations, unified definitions/cohorts
+  amp/cohort_members.ts # async cohort export (request, poll, download, parse)
+  cli.ts                # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
+  log.ts                # stderr logger
+bin/               # vgi-amplitude-worker (what DuckDB launches)
+tests/             # bun unit tests
 test/sql/          # sqllogictest files run through DuckDB
-test/mock_api/     # offline mock of the REST API used by tests
-examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY …
+test/mock_api/     # strict offline Amplitude replay server used by the SQL tests
+test/fixtures/     # fixture builder (events, real export ZIPs, cohorts) + committed sample archive
 ci/                # integration harness used by `make test-sql` and CI
 scripts/           # vgi_template.py (init / template-diff)
 vgi-agent-tests.yaml  # private graders for the agent test tasks
