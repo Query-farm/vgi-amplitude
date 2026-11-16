@@ -195,7 +195,7 @@ never enter table-function state, logs or error messages, and are sent only to t
 **Prerequisites:** [Bun](https://bun.sh) 1.3+ (for a source checkout).
 
 ```bash
-git clone --branch v0.1.0 https://github.com/Query-farm/vgi-amplitude.git && cd vgi-amplitude
+git clone --branch v0.1.2 https://github.com/Query-farm/vgi-amplitude.git && cd vgi-amplitude
 bun install --frozen-lockfile
 ```
 
