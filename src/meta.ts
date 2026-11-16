@@ -80,22 +80,19 @@ export const CATALOG_COMMENT =
   "Amplitude product analytics as SQL: raw events from the Export API, segmentation, funnel, retention and revenue charts, user lookups, cohorts and the tracking plan, read-only.";
 
 export const CATALOG_DOC_LLM =
-  "Read-only SQL access to one Amplitude project. Reach for it to answer: what happened, event by event " +
-  "(amplitude.main.events() over the Export API; ALWAYS bound event_time, which becomes the export's " +
-  "upload-hour range), how many users did X per day/week and by which property (segmentation(event, " +
-  "start_date, end_date, metric :=, granularity :=, group_by :=)), how users convert through steps " +
-  "(funnel([steps], start_date, end_date)), whether they come back (retention(start_event, return_event, " +
-  "start_date, end_date)), DAU/new users (active_users), sessions (average_session_length, " +
-  "sessions_per_user, session_length_distribution), right-now traffic (realtime_active_users), lifetime " +
-  "value (revenue_ltv), breakdowns (user_composition), one user's history (user_search → user_activity / " +
-  "user_profile), cohorts and their members (cohorts, cohort_members(cohort_id), an async export with a " +
-  "monthly quota), the tracking plan (event_types, event_properties, user_properties, group_properties, " +
-  "event_categories, event_totals) and chart annotations. Charts are computed inside Amplitude and return " +
-  "long rows (series_label, period, value). Schema `unified` holds the cross-tool product-analytics " +
-  "vocabulary (events, users(query), cohorts, event_definitions, property_definitions) shared with the " +
-  "Mixpanel, Segment and PostHog workers, for UNION ALL across tools. Every object needs an `amplitude` " +
-  "DuckDB secret with API_KEY and SECRET_KEY (Basic auth) and REGION 'eu' for EU data residency. Docs: " +
-  "https://amplitude.com/docs/apis/analytics/export , https://amplitude.com/docs/apis/analytics/dashboard-rest .";
+  "Read-only SQL access to one Amplitude project. Reach for it to answer product-analytics questions: " +
+  "what happened event by event (raw events stream from the Export API by upload hour, so ALWAYS bound " +
+  "event_time; the range is pushed down as the export window), how many users did something per " +
+  "day/week and by which property, how users convert through a sequence of steps, whether they come " +
+  "back, session and revenue metrics, one user's history and profile, behavioral cohorts and their " +
+  "members (member download is an async export with a monthly quota), and the tracking plan. Chart " +
+  "functions are computed inside Amplitude, take start_date / end_date DATEs plus Amplitude's own " +
+  "parameters as named arguments, and return long rows (series_label, period, value). Schema `main` " +
+  "holds every Amplitude-specific object; schema `unified` holds the cross-tool product-analytics " +
+  "vocabulary shared with the Mixpanel, Segment and PostHog workers, for UNION ALL across tools. Every " +
+  "object needs an `amplitude` DuckDB secret with API_KEY and SECRET_KEY (Basic auth) and REGION 'eu' " +
+  "for EU data residency. Docs: https://amplitude.com/docs/apis/analytics/export , " +
+  "https://amplitude.com/docs/apis/analytics/dashboard-rest .";
 
 export const CATALOG_DOC_MD =
   "# Amplitude\n\n" +
@@ -109,10 +106,12 @@ export const CATALOG_DOC_MD =
   SOURCES_MD;
 
 export const SCHEMA_DOC_LLM =
-  "Amplitude objects. events() reads raw events (filter event_time). Chart functions take start_date / " +
-  "end_date DATEs and Amplitude's own parameters as named arguments and return long rows. Tables: " +
-  "event_types, event_totals, event_categories, event_properties, user_properties, group_properties, " +
-  "cohorts, annotations. All need an `amplitude` secret.";
+  "Amplitude-specific objects. The raw event stream reads the Export API by upload hour (filter " +
+  "event_time). Chart functions take start_date / end_date DATEs and Amplitude's own parameters as named " +
+  "arguments and return long rows. Tracking-plan, cohort and annotation tables mirror Amplitude's " +
+  "Taxonomy, Cohorts and Annotations APIs. All need an `amplitude` secret.";
+
+export const SCHEMA_COMMENT = "Amplitude-native events, charts, users, cohorts and tracking plan, read-only.";
 
 export const SCHEMA_DOC_MD =
   "## main\n\n" +
@@ -125,6 +124,8 @@ export const UNIFIED_DOC_LLM =
   "property_definitions with the same column names and types in every analytics worker (Amplitude, " +
   "Mixpanel, Segment, PostHog), each row tagged with `tool`. Use it to UNION ALL across tools; use schema " +
   "main for every Amplitude-specific field.";
+
+export const UNIFIED_COMMENT = "Amplitude data in the shared cross-tool product-analytics shape.";
 
 export const UNIFIED_DOC_MD =
   "## unified\n\n" +

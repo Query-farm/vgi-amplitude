@@ -14,10 +14,10 @@ import {
   CATALOG_COMMENT,
   CATALOG_NAME,
   CATALOG_TAGS,
-  SCHEMA_DOC_MD,
+  SCHEMA_COMMENT,
   SCHEMA_TAGS,
   SOURCE_URL,
-  UNIFIED_DOC_MD,
+  UNIFIED_COMMENT,
   UNIFIED_SCHEMA_TAGS,
 } from "./meta.ts";
 
@@ -90,14 +90,14 @@ export const CATALOG: CatalogDescriptor = {
   schemas: [
     {
       path: ["main"],
-      comment: SCHEMA_DOC_MD,
+      comment: SCHEMA_COMMENT,
       functions: FUNCTIONS,
       tables: TABLES,
       tags: { ...SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(MAIN_EXAMPLES.slice(0, 12)) },
     },
     {
       path: ["unified"],
-      comment: UNIFIED_DOC_MD,
+      comment: UNIFIED_COMMENT,
       functions: UNIFIED_FUNCTIONS,
       tables: UNIFIED_TABLES,
       tags: { ...UNIFIED_SCHEMA_TAGS, "vgi.example_queries": JSON.stringify(UNIFIED_EXAMPLES) },
