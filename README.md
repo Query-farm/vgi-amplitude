@@ -195,7 +195,7 @@ never enter table-function state, logs or error messages, and are sent only to t
 **Prerequisites:** [Bun](https://bun.sh) 1.3+ (for a source checkout).
 
 ```bash
-git clone --branch v0.1.3 https://github.com/Query-farm/vgi-amplitude.git && cd vgi-amplitude
+git clone --branch v0.2.0 https://github.com/Query-farm/vgi-amplitude.git && cd vgi-amplitude
 bun install --frozen-lockfile
 ```
 
@@ -209,7 +209,7 @@ LOAD vgi FROM query_farm;
 ATTACH 'amplitude' (TYPE vgi, LOCATION '/abs/path/to/vgi-amplitude/bin/vgi-amplitude-worker');
 ```
 
-**Haybarn 2.0** (`uvx haybarn-cli`):
+**Haybarn 2.0.1+** (`uvx haybarn-cli`; Haybarn 2.0.0 serves an older vgi extension that cannot attach this worker):
 
 ```sql
 INSTALL vgi FROM community;
